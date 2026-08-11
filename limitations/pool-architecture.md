@@ -342,6 +342,14 @@ properties that real CPython does not provide, per the caveat above.
   `session.load_session` / `session.load_snapshot` (Rust `Checkout::restore`).
   A version mismatch is reported as such — naming both versions — so a stale
   snapshot is distinguishable from a corrupt one.
+- **Dump bytes are unauthenticated.** The format versions the schema, it does
+  not prove provenance, so restoring a dump is as powerful as running the
+  Python it was made from: it resumes arbitrary bytecode, which can call any
+  external function the host would answer for fresh code (including the name
+  and arguments a restored suspension re-announces). Loading is still safe in
+  the sandbox sense — a forged dump cannot escape it or evade its limits — but
+  only restore dumps from a store you control, and let `os` / external-function
+  handlers authorize by their own rules rather than by the announced name.
 - **`feed_start` snapshots are live cursors, not owned state.** The execution
   state lives in the worker, so only one suspension is live per session, each
   snapshot may be resumed at most once (a second resume raises

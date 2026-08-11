@@ -6,6 +6,19 @@
 //! exactly one dump shape, so hosts need no format knowledge beyond [`dump`]
 //! and [`Dump::load`]; whether the session was idle or suspended is the
 //! [`Session`] discriminant, not a separate tag.
+//!
+//! # Trust model
+//!
+//! Dumps are unauthenticated: the header versions the schema, it does not
+//! prove provenance, and no field ordering makes one harder to forge than
+//! another (postcard writes structs as flat concatenated fields). Restoring a
+//! dump is therefore as powerful as running the Python it was made from — it
+//! resumes arbitrary bytecode, which can call any external function the host
+//! would answer for fresh code. Decoding stays panic-free and honours the
+//! session's limits, so a forged dump cannot escape the sandbox; it can only
+//! do what sandboxed code could already do. Restore dumps from a store the
+//! host controls, and require host callbacks to authorize by their own rules
+//! rather than by trusting the name a dump announces.
 
 use std::{error::Error, fmt, mem::size_of};
 
@@ -26,7 +39,7 @@ const MAGIC: &[u8; 6] = b"MONTY\0";
 /// rejected instead of decoding as their neighbour. That covers the
 /// interpreter's own types *and* everything reachable from [`Dump`] — notably
 /// `TypeCheckingConfig` in `monty-types`.
-pub const DUMP_VERSION: u16 = 6;
+pub const DUMP_VERSION: u16 = 5;
 
 /// Number of bytes before the postcard payload.
 const HEADER_LEN: usize = MAGIC.len() + size_of::<u16>();
@@ -82,6 +95,10 @@ pub struct Dump {
 
 impl Dump {
     /// Restores a session dumped by [`dump`].
+    ///
+    /// Validates framing and payload — a corrupt or forged dump errors rather
+    /// than panicking — but does not authenticate the bytes (see the module
+    /// docs on the trust model).
     ///
     /// # Errors
     /// Returns [`DumpError`] for a dump this build cannot read — most usefully

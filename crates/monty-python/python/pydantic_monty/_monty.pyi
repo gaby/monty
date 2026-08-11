@@ -624,6 +624,10 @@ class MontySession:
         limits / type-check state (the `checkout()` config for those is not
         applied); the dataclass registry from `checkout()` is reused. Raises if
         the dump is actually a suspended snapshot.
+
+        Dump bytes are unauthenticated, so restoring one is as powerful as
+        running the code it was made from — only load dumps from a store you
+        control.
         """
 
     def load_snapshot(
@@ -650,6 +654,11 @@ class MontySession:
         calls degrade into unhandled OS calls. `'overlay'` writes made before
         the dump are not preserved (the restored overlay starts empty). Raises
         if the dump is actually an idle session.
+
+        Dump bytes are unauthenticated, so restoring one is as powerful as
+        running the code it was made from, and the re-announced call's name and
+        arguments come from the dump — only load dumps from a store you control,
+        and let `external_lookup` / `os` authorize on their own terms.
 
         `external_lookup` / `os` are captured for `resume_auto()`, exactly as on
         `feed_start`. One caveat applies to a *restored* snapshot: a restored

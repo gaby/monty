@@ -263,6 +263,9 @@ export class MontySession {
    * Valid only on a fresh session, before any feed or load (it replaces the
    * whole session); throws otherwise. The dump restores its own resource limits
    * and type-check state. Throws if the dump is actually a suspended snapshot.
+   *
+   * Dump bytes are unauthenticated, so restoring one is as powerful as running
+   * the code it was made from — only load dumps from a store you control.
    */
   async loadSession(state: Uint8Array): Promise<void> {
     this.claimFresh()
@@ -293,6 +296,10 @@ export class MontySession {
    * Re-supply the same `mount`s the paused feed used (their host paths are not
    * in the dump), or its filesystem calls degrade into unhandled OS calls.
    * Throws if the dump is actually an idle session.
+   *
+   * Dump bytes are unauthenticated and the re-announced call's name and
+   * arguments come from the dump — only load dumps from a store you control,
+   * and let `externalLookup` / `os` authorize on their own terms.
    */
   async loadSnapshot(state: Uint8Array, options: LoadSnapshotOptions = {}): Promise<Snapshot> {
     this.claimFresh()
