@@ -183,6 +183,29 @@ fn run_progress_round_trip_at_external_call() {
     assert_eq!(result.into_complete().unwrap(), MontyObject::Int(101)); // 100 + 1
 }
 
+/// Dispatch metadata is serialized from the continuation, not from the public
+/// projection a host may have modified while inspecting the call.
+#[test]
+fn run_progress_dump_binds_external_call_metadata_to_snapshot() {
+    let runner = MontyRun::new("safe(1)".to_owned(), "test.py", vec![], CompileOptions::default()).unwrap();
+    let progress = runner
+        .start(vec![], ResourceTracker::default(), PrintWriter::Stdout)
+        .unwrap();
+    let mut progress = resolve_name_lookups(progress).unwrap();
+
+    let RunProgress::FunctionCall(call) = &mut progress else {
+        panic!("expected a function call");
+    };
+    call.function_name = "privileged".to_owned();
+    call.args = vec![MontyObject::String("forged".to_owned())];
+
+    let loaded = round_trip_progress(&progress).into_function_call().unwrap();
+    assert_eq!(loaded.function_name, "safe");
+    assert_eq!(loaded.args, vec![MontyObject::Int(1)]);
+    let completed = loaded.resume(MontyObject::Int(2), PrintWriter::Stdout).unwrap();
+    assert_eq!(completed.into_complete(), Some(MontyObject::Int(2)));
+}
+
 #[test]
 fn run_progress_round_trip_multiple_calls() {
     // Test multiple external calls with a round-trip between each

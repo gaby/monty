@@ -515,19 +515,51 @@ impl ReplProgress {
 /// Resume with `resume(result, print)` to provide the return value and continue,
 /// or `resume_pending(print)` to push an `ExternalFuture` for async resolution.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "SerializedReplFunctionCall")]
 pub struct ReplFunctionCall {
     /// The name of the function or method being called.
+    #[serde(skip)]
     pub function_name: String,
     /// The positional arguments passed to the function.
+    #[serde(skip)]
     pub args: Vec<MontyObject>,
     /// The keyword arguments passed to the function (key, value pairs).
+    #[serde(skip)]
     pub kwargs: Vec<(MontyObject, MontyObject)>,
     /// Unique identifier for this call (used for async correlation).
+    #[serde(skip)]
     pub call_id: u32,
     /// Whether this is a dataclass method call (first arg is `self`).
+    #[serde(skip)]
     pub method_call: bool,
     /// Internal REPL execution snapshot.
     snapshot: ReplSnapshot,
+}
+
+/// Serialized REPL calls derive their public metadata from the continuation.
+#[derive(serde::Deserialize)]
+struct SerializedReplFunctionCall {
+    snapshot: ReplSnapshot,
+}
+
+impl TryFrom<SerializedReplFunctionCall> for ReplFunctionCall {
+    type Error = &'static str;
+
+    fn try_from(value: SerializedReplFunctionCall) -> Result<Self, Self::Error> {
+        let pending = value
+            .snapshot
+            .pending_function_call
+            .clone()
+            .ok_or("REPL function-call snapshot is missing its pending call")?;
+        Ok(Self {
+            function_name: pending.function_name,
+            args: pending.args,
+            kwargs: pending.kwargs,
+            call_id: pending.call_id,
+            method_call: pending.method_call,
+            snapshot: value.snapshot,
+        })
+    }
 }
 
 impl ReplFunctionCall {
@@ -650,6 +682,7 @@ impl ReplNameLookup {
             mut repl,
             executor,
             vm_state,
+            ..
         } = snapshot;
 
         match HeapReader::with(&mut repl.heap, &mut (&executor, print), |reader, (executor, print)| {
@@ -883,6 +916,8 @@ pub(crate) struct ReplSnapshot {
     executor: Executor,
     /// VM stack/frame state at suspension.
     vm_state: VMSnapshot,
+    /// Canonical callback metadata for a function-call suspension.
+    pending_function_call: Option<crate::run_progress::PendingFunctionCall>,
 }
 
 impl ReplSnapshot {
@@ -907,6 +942,7 @@ impl ReplSnapshot {
             mut repl,
             executor,
             vm_state,
+            ..
         } = self;
 
         let ext_result = result.into();
@@ -992,6 +1028,7 @@ fn build_repl_progress(
                 repl,
                 executor,
                 vm_state: vm_state.expect("snapshot should exist"),
+                pending_function_call: None,
             }
         };
     }
@@ -1013,14 +1050,25 @@ fn build_repl_progress(
             kwargs,
             call_id,
             method_call,
-        } => Ok(ReplProgress::FunctionCall(ReplFunctionCall {
-            function_name,
-            args,
-            kwargs,
-            call_id,
-            method_call,
-            snapshot: new_repl_snapshot!(),
-        })),
+        } => {
+            let pending = crate::run_progress::PendingFunctionCall {
+                function_name: function_name.clone(),
+                args: args.clone(),
+                kwargs: kwargs.clone(),
+                call_id,
+                method_call,
+            };
+            let mut snapshot = new_repl_snapshot!();
+            snapshot.pending_function_call = Some(pending);
+            Ok(ReplProgress::FunctionCall(ReplFunctionCall {
+                function_name,
+                args,
+                kwargs,
+                call_id,
+                method_call,
+                snapshot,
+            }))
+        }
         ConvertedExit::OsCall { function_call, call_id } => Ok(ReplProgress::OsCall(ReplOsCall {
             function_call,
             call_id,

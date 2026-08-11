@@ -105,19 +105,66 @@ impl RunProgress {
 /// When `method_call` is true, this represents a dataclass method call where the first
 /// positional arg is the dataclass instance (`self`).
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "SerializedFunctionCall")]
 pub struct FunctionCall {
     /// The name of the function or method being called.
+    #[serde(skip)]
     pub function_name: String,
     /// The positional arguments passed to the function.
+    #[serde(skip)]
     pub args: Vec<MontyObject>,
     /// The keyword arguments passed to the function (key, value pairs).
+    #[serde(skip)]
     pub kwargs: Vec<(MontyObject, MontyObject)>,
     /// Unique identifier for this call (used for async correlation).
+    #[serde(skip)]
     pub call_id: u32,
     /// Whether this is a dataclass method call (first arg is `self`).
+    #[serde(skip)]
     pub method_call: bool,
     /// Internal execution snapshot.
     snapshot: Snapshot,
+}
+
+/// Serialized function calls keep dispatch metadata inside the continuation.
+#[derive(serde::Deserialize)]
+struct SerializedFunctionCall {
+    snapshot: Snapshot,
+}
+
+impl TryFrom<SerializedFunctionCall> for FunctionCall {
+    type Error = &'static str;
+
+    fn try_from(value: SerializedFunctionCall) -> Result<Self, Self::Error> {
+        let pending = value
+            .snapshot
+            .pending_function_call
+            .clone()
+            .ok_or("function-call snapshot is missing its pending call")?;
+        Ok(Self {
+            function_name: pending.function_name,
+            args: pending.args,
+            kwargs: pending.kwargs,
+            call_id: pending.call_id,
+            method_call: pending.method_call,
+            snapshot: value.snapshot,
+        })
+    }
+}
+
+/// Canonical external-call identity stored as part of the VM continuation.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct PendingFunctionCall {
+    /// Function or method the VM yielded to.
+    pub(crate) function_name: String,
+    /// Positional arguments belonging to the yielded call.
+    pub(crate) args: Vec<MontyObject>,
+    /// Keyword arguments belonging to the yielded call.
+    pub(crate) kwargs: Vec<(MontyObject, MontyObject)>,
+    /// Scheduler identifier for the yielded call.
+    pub(crate) call_id: u32,
+    /// Whether the yielded call targets a dataclass method.
+    pub(crate) method_call: bool,
 }
 
 impl FunctionCall {
@@ -316,6 +363,7 @@ impl NameLookup {
             mut heap,
             executor,
             vm_state: snapshot_vm_state,
+            ..
         } = self.snapshot;
         let namespace_slot = self.namespace_slot;
         let is_global = self.is_global;
@@ -529,6 +577,8 @@ pub(crate) struct Snapshot {
     pub(crate) vm_state: VMSnapshot,
     /// The heap containing all allocated objects.
     pub(crate) heap: Heap,
+    /// Canonical callback metadata for a function-call suspension.
+    pending_function_call: Option<PendingFunctionCall>,
 }
 
 impl Snapshot {
@@ -544,6 +594,7 @@ impl Snapshot {
             executor,
             vm_state,
             mut heap,
+            ..
         } = self;
 
         let (converted, vm_state) =
@@ -727,6 +778,7 @@ pub(crate) fn build_run_progress(
                 executor,
                 vm_state: vm_state.expect("snapshot should exist"),
                 heap,
+                pending_function_call: None,
             }
         };
     }
@@ -739,14 +791,25 @@ pub(crate) fn build_run_progress(
             kwargs,
             call_id,
             method_call,
-        } => Ok(RunProgress::FunctionCall(FunctionCall::new(
-            function_name,
-            args,
-            kwargs,
-            call_id,
-            method_call,
-            new_snapshot!(),
-        ))),
+        } => {
+            let pending = PendingFunctionCall {
+                function_name: function_name.clone(),
+                args: args.clone(),
+                kwargs: kwargs.clone(),
+                call_id,
+                method_call,
+            };
+            let mut snapshot = new_snapshot!();
+            snapshot.pending_function_call = Some(pending);
+            Ok(RunProgress::FunctionCall(FunctionCall::new(
+                function_name,
+                args,
+                kwargs,
+                call_id,
+                method_call,
+                snapshot,
+            )))
+        }
         ConvertedExit::OsCall { function_call, call_id } => Ok(RunProgress::OsCall(OsCall::new(
             function_call,
             call_id,
